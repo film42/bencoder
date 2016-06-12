@@ -21,7 +21,13 @@ impl BEncoder {
         let mut cursor = chars.by_ref();
         let next = cursor.next();
 
-        match next {
+        BEncoder::detect_and_decode(cursor, next)
+    }
+
+    fn detect_and_decode(cursor: &mut Chars, current: Option<char>) -> Result<BType, &'static str> {
+        match current {
+            // Parse a dict
+            Some('d') => BEncoder::decode_dict(cursor),
             // Parse an integer
             Some('i') => BEncoder::decode_integer(cursor),
             // Parse a list
@@ -32,26 +38,60 @@ impl BEncoder {
         }
     }
 
+    fn decode_dict(cursor: &mut Chars) -> Result<BType, &'static str> {
+        let mut elements = vec![];
+
+        let mut next = cursor.next();
+
+        while next.is_some() {
+            if next == Some('e') {
+                // Check for base case
+                if elements.len() % 2 != 0 {
+                    return Err("Odd number of hash elements provided.");
+                }
+
+                let mut acc = HashMap::new();
+
+                while !elements.is_empty() {
+                    let value = elements.pop().unwrap();
+                    let key = match elements.pop() {
+                        Some(BType::ByteString(string)) => string,
+                        _ => return Err("Dict keys must be a string type.")
+                    };
+
+                    acc.insert(key, value);
+                }
+
+                return Ok(BType::Dict(acc));
+            }
+
+            let result = BEncoder::detect_and_decode(cursor, next);
+
+            if result.is_ok() {
+                elements.push(result.unwrap());
+            } else {
+                return result;
+            }
+
+            // Adv the cursor
+            next = cursor.next();
+        }
+
+        Err("A list was not terminated with an 'e'.")
+    }
+
     fn decode_list(cursor: &mut Chars) -> Result<BType, &'static str> {
         let mut acc = vec![];
 
         let mut next = cursor.next();
 
         while next.is_some() {
-            let result = match next {
+            if next == Some('e') {
                 // Check for base case (closed list)
-                Some('e') => return Ok(BType::List(acc)),
+                return Ok(BType::List(acc))
+            }
 
-                // Parse an integer
-                Some('i') => BEncoder::decode_integer(cursor),
-
-                // Parse a list
-                Some('l') => BEncoder::decode_list(cursor),
-
-                // Parse a string
-                Some(chr) if chr.is_digit(10) => BEncoder::decode_string(chr, cursor),
-                _ => Err("Something is missing.")
-            };
+            let result = BEncoder::detect_and_decode(cursor, next);
 
             if result.is_ok() {
                 acc.push(result.unwrap());
@@ -112,6 +152,8 @@ impl BEncoder {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::BEncoder;
     use super::BType;
 
@@ -190,5 +232,41 @@ mod tests {
                        BType::List(vec![BType::ByteString("hello".to_string())]),
                        BType::Integer(-10)
                            ]));
+    }
+
+    #[test]
+    fn it_can_parse_an_empty_dict() {
+        let result = BEncoder::decode("de".to_string());
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BType::Dict(HashMap::new()));
+    }
+
+    #[test]
+    fn it_can_parse_a_simple_dict() {
+        let result = BEncoder::decode("d4:key16:value14:key26:value2e".to_string());
+
+        let mut example = HashMap::new();
+        example.insert("key1".to_string(), BType::ByteString("value1".to_string()));
+        example.insert("key2".to_string(), BType::ByteString("value2".to_string()));
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BType::Dict(example));
+    }
+
+    #[test]
+    fn it_can_parse_a_complex_dict() {
+        let result = BEncoder::decode("d4:key16:value14:key26:value22:okll5:helloei-10eee".to_string());
+
+        let mut example = HashMap::new();
+        example.insert("key1".to_string(), BType::ByteString("value1".to_string()));
+        example.insert("key2".to_string(), BType::ByteString("value2".to_string()));
+        example.insert("ok".to_string(), BType::List(vec![
+            BType::List(vec![BType::ByteString("hello".to_string())]),
+            BType::Integer(-10)
+                ]));
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BType::Dict(example));
     }
 }
