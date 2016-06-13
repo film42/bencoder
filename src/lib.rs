@@ -1,17 +1,35 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::str::Chars;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum BType {
     ByteString(String),
     Integer(i64),
     List(Vec<BType>),
-    Dict(HashMap<String, BType>)
+    Dict(BTreeMap<String, BType>)
 }
 
 pub struct BEncoder;
 
 impl BEncoder {
+    pub fn encode(input: BType) -> String {
+        match input {
+            BType::ByteString(string) => format!("{}:{}", string.len(), string),
+            BType::Integer(number) => format!("i{}e", number),
+            BType::List(vec) => {
+                let string = vec.iter().map(|btype| BEncoder::encode(btype.clone())).collect::<String>();
+
+                format!("l{}e", string)
+            },
+            BType::Dict(hash) => {
+                let string = hash.iter().map(|(key, btype)| {
+                    format!("{}{}", BEncoder::encode(BType::ByteString(key.clone())), BEncoder::encode(btype.clone()))
+                }).collect::<String>();
+
+                format!("d{}e", string)
+            }
+        }
+    }
     pub fn decode(input: String) -> Result<BType, &'static str> {
         if input.len() < 2 {
             return Err("Input string is too short.");
@@ -50,7 +68,7 @@ impl BEncoder {
                     return Err("Odd number of hash elements provided.");
                 }
 
-                let mut acc = HashMap::new();
+                let mut acc = BTreeMap::new();
 
                 while !elements.is_empty() {
                     let value = elements.pop().unwrap();
@@ -152,7 +170,7 @@ impl BEncoder {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     use super::BEncoder;
     use super::BType;
@@ -239,14 +257,14 @@ mod tests {
         let result = BEncoder::decode("de".to_string());
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), BType::Dict(HashMap::new()));
+        assert_eq!(result.unwrap(), BType::Dict(BTreeMap::new()));
     }
 
     #[test]
     fn it_can_parse_a_simple_dict() {
         let result = BEncoder::decode("d4:key16:value14:key26:value2e".to_string());
 
-        let mut example = HashMap::new();
+        let mut example = BTreeMap::new();
         example.insert("key1".to_string(), BType::ByteString("value1".to_string()));
         example.insert("key2".to_string(), BType::ByteString("value2".to_string()));
 
@@ -258,7 +276,7 @@ mod tests {
     fn it_can_parse_a_complex_dict() {
         let result = BEncoder::decode("d4:key16:value14:key26:value22:okll5:helloei-10eee".to_string());
 
-        let mut example = HashMap::new();
+        let mut example = BTreeMap::new();
         example.insert("key1".to_string(), BType::ByteString("value1".to_string()));
         example.insert("key2".to_string(), BType::ByteString("value2".to_string()));
         example.insert("ok".to_string(), BType::List(vec![
@@ -269,4 +287,69 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), BType::Dict(example));
     }
+
+    //
+    // Encoding
+    //
+    #[test]
+    fn it_can_encode_a_string() {
+        let result = BEncoder::encode(BType::ByteString("test".to_string()));
+
+        assert_eq!(result, "4:test");
+    }
+
+    #[test]
+    fn it_can_encode_a_positive_integer() {
+        let result = BEncoder::encode(BType::Integer(123));
+
+        assert_eq!(result, "i123e");
+    }
+
+    #[test]
+    fn it_can_encode_a_negative_integer() {
+        let result = BEncoder::encode(BType::Integer(-12345));
+
+        assert_eq!(result, "i-12345e");
+    }
+
+    #[test]
+    fn it_can_encode_a_list() {
+        let result = BEncoder::encode(BType::List(vec![BType::Integer(-12345)]));
+
+        assert_eq!(result, "li-12345ee");
+    }
+
+    #[test]
+    fn it_can_encode_a_nested_list() {
+        let result = BEncoder::encode(BType::List(vec![BType::List(vec![BType::ByteString("thing".to_string())])]));
+
+        assert_eq!(result, "ll5:thingee");
+    }
+
+    #[test]
+    fn it_can_encode_a_dict() {
+        let mut example = BTreeMap::new();
+        example.insert("key1".to_string(), BType::ByteString("value1".to_string()));
+        example.insert("key2".to_string(), BType::ByteString("value2".to_string()));
+
+        let result = BEncoder::encode(BType::Dict(example));
+
+        assert_eq!(result, "d4:key16:value14:key26:value2e");
+    }
+
+    #[test]
+    fn it_can_encode_a_complex_dict() {
+        let mut example = BTreeMap::new();
+        example.insert("key1".to_string(), BType::ByteString("value1".to_string()));
+        example.insert("key2".to_string(), BType::ByteString("value2".to_string()));
+        example.insert("key3".to_string(), BType::List(vec![
+            BType::List(vec![BType::ByteString("hello".to_string())]),
+            BType::Integer(-1234)
+                ]));
+
+        let result = BEncoder::encode(BType::Dict(example));
+
+        assert_eq!(result, "d4:key16:value14:key26:value24:key3ll5:helloei-1234eee");
+    }
+
 }
